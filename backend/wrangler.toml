@@ -1,18 +1,14 @@
-name = "week-13-offline"
-compatibility_date = "2023-12-01"
+name = "medium-api"
+main = "src/index.ts"
+compatibility_date = "2025-09-01"
+# node-postgres (used by the Prisma driver adapter) needs the Node.js compatibility layer.
+compatibility_flags = ["nodejs_compat"]
 
 [vars]
-DATABASE_URL="prisma://accelerate.prisma-data.net/?api_key=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhcGlfa2V5IjoiZTI1NTI3YTEtMDQwNy00YzZlLWI2ZWMtZWM1YTU2NDYxNjA0IiwidGVuYW50X2lkIjoiNTIzM2ZjNGVjMTY3ZjExNmVkNGEwMDNmNjMyNGVmYzdjMzcyNGI2MjI5ODhiMTQyNzI4MTRmYTkyMWYzN2QxYyIsImludGVybmFsX3NlY3JldCI6IjVkY2RkOTM0LTIwYTItNGE4Mi05MTY4LWQ3NDcwNjQzYzMzNyJ9.sIYosN8u5TNc8JsMRDzHK3mCyYArOCGWUXNskZw72p0"
-JWT_SECRET = "asdasdasd"
-# [[kv_namespaces]]
-# binding = "MY_KV_NAMESPACE"
-# id = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+# Comma-separated browser origins allowed to call the API.
+CORS_ORIGINS = "http://localhost:5173"
 
-# [[r2_buckets]]
-# binding = "MY_BUCKET"
-# bucket_name = "my-bucket"
-
-# [[d1_databases]]
-# binding = "DB"
-# database_name = "my-database"
-# database_id = ""
+# Secrets are NOT stored here:
+#   local:      backend/.dev.vars          (copy .dev.vars.example)
+#   production: npx wrangler secret put DATABASE_URL
+#               npx wrangler secret put JWT_SECRET

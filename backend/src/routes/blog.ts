@@ -1,153 +1,64 @@
-import { createBlogInput, updateBlogInput } from "@souvik97381/medium-common";
-import { PrismaClient } from "@prisma/client/edge";
-import { withAccelerate } from "@prisma/extension-accelerate";
-import { Hono } from "hono";
-import { verify } from "hono/jwt";
+import { createPostInput, paginationQuery, postIdParam, updatePostInput, type Paginated, type PostSummary } from "@medium/common";
+import { Hono, type Context } from "hono";
+import { optionalAuth, requireAuth } from "../lib/auth";
+import { forbidden, notFound } from "../lib/errors";
+import { toPost, toSummary } from "../lib/present";
+import { parse, readJson } from "../lib/validate";
+import type { AppEnv } from "../types";
 
-export const blogRouter = new Hono<{
-    Bindings: {
-        DATABASE_URL: string;
-        JWT_SECRET: string;
-    }, 
-    Variables: {
-        userId: string;
-    }
-}>();
+export const blogRouter = new Hono<AppEnv>();
 
-blogRouter.use("/*", async (c, next) => {
-    const authHeader = c.req.header("authorization") || "";
-    try {
-        const user = await verify(authHeader, c.env.JWT_SECRET);
-        if (user) {
-            //@ts-ignore
-            c.set("userId", user.id);
-            await next();
-        } else {
-            c.status(403);
-            return c.json({
-                message: "You are not logged in"
-            })
-        }
-    } catch(e) {
-        c.status(403);
-        return c.json({
-            message: "You are not logged in"
-        })
-    }
+/** Published stories, newest first. Public. */
+blogRouter.get("/bulk", async (c) => {
+  const { page, pageSize } = parse(paginationQuery, c.req.query());
+  const { items, total } = await c.get("store").posts.listPublished({ skip: (page - 1) * pageSize, take: pageSize });
+  const body: Paginated<PostSummary> = {
+    items: items.map(toSummary),
+    page,
+    pageSize,
+    total,
+    totalPages: Math.max(1, Math.ceil(total / pageSize)),
+  };
+  return c.json(body);
 });
 
-blogRouter.post('/', async (c) => {
-    const body = await c.req.json();
-    const { success } = createBlogInput.safeParse(body);
-    if (!success) {
-        c.status(411);
-        return c.json({
-            message: "Inputs not correct"
-        })
-    }
+/** The signed-in author's stories, including drafts. */
+blogRouter.get("/mine", requireAuth, async (c) => {
+  const posts = await c.get("store").posts.listByAuthor(c.get("userId"));
+  return c.json({ items: posts.map(toSummary) });
+});
 
-    const authorId = c.get("userId");
-    const prisma = new PrismaClient({
-      datasourceUrl: c.env.DATABASE_URL,
-    }).$extends(withAccelerate())
+/** One story. Drafts are only visible to their author. */
+blogRouter.get("/:id", optionalAuth, async (c) => {
+  const { id } = parse(postIdParam, { id: c.req.param("id") });
+  const post = await c.get("store").posts.findById(id);
+  if (!post || (!post.published && post.authorId !== c.get("userId"))) throw notFound("Story not found");
+  return c.json({ post: toPost(post) });
+});
 
-    const blog = await prisma.blog.create({
-        data: {
-            title: body.title,
-            content: body.content,
-            authorId: Number(authorId) // parseInt(authorId)
-        }
-    })
+blogRouter.post("/", requireAuth, async (c) => {
+  const input = parse(createPostInput, await readJson(c.req));
+  const post = await c.get("store").posts.create({ ...input, authorId: c.get("userId") });
+  return c.json({ post: toPost(post) }, 201);
+});
 
-    return c.json({
-        id: blog.id,
-        message: "blog added successfully"
-    })
-})
+async function ownedPost(c: Context<AppEnv>) {
+  const { id } = parse(postIdParam, { id: c.req.param("id") });
+  const post = await c.get("store").posts.findById(id);
+  if (!post) throw notFound("Story not found");
+  if (post.authorId !== c.get("userId")) throw forbidden("You can only change your own stories");
+  return post;
+}
 
-blogRouter.put('/', async (c) => {
-    const body = await c.req.json();
-    const { success } = updateBlogInput.safeParse(body);
-    if (!success) {
-        c.status(411);
-        return c.json({
-            message: "Inputs not correct"
-        })
-    }
+blogRouter.put("/:id", requireAuth, async (c) => {
+  const post = await ownedPost(c);
+  const changes = parse(updatePostInput, await readJson(c.req));
+  const updated = await c.get("store").posts.update(post.id, changes);
+  return c.json({ post: toPost(updated) });
+});
 
-    const prisma = new PrismaClient({
-      datasourceUrl: c.env.DATABASE_URL,
-    }).$extends(withAccelerate())
-
-    const blog = await prisma.blog.update({
-        where: {
-            id: body.id
-        }, 
-        data: {
-            title: body.title,
-            content: body.content
-        }
-    })
-
-    return c.json({
-        id: blog.id,
-        message: "blog updated successfully"
-    })
-})
-
-// Todo: add pagination
-blogRouter.get('/bulk', async (c) => {
-    const prisma = new PrismaClient({
-        datasourceUrl: c.env.DATABASE_URL,
-    }).$extends(withAccelerate())
-    const blogs = await prisma.blog.findMany({
-        select: {
-            content: true,
-            title: true,
-            id: true,
-            author: {
-                select: {
-                    name: true
-                }
-            }
-        }
-    });
-
-    return c.json({
-        blogs
-    })
-})
-
-blogRouter.get('/:id', async (c) => {
-    const id = c.req.param("id");
-    const prisma = new PrismaClient({
-      datasourceUrl: c.env.DATABASE_URL,
-    }).$extends(withAccelerate())
-
-    try {
-        const blog = await prisma.blog.findFirst({
-            where: {
-                id: Number(id)
-            },
-            select: {
-                id: true,
-                title: true,
-                content: true,
-                author: {
-                    select: {
-                        name: true
-                    }
-                }
-            }
-        })
-    
-        return c.json({
-            blog
-        });
-    } catch(e) {
-        c.status(411); // 4
-        return c.json({
-            message: "Error while fetching blog post"
-        });
-    }
-})
+blogRouter.delete("/:id", requireAuth, async (c) => {
+  const post = await ownedPost(c);
+  await c.get("store").posts.delete(post.id);
+  return c.body(null, 204);
+});

@@ -1,0 +1,8 @@
+# Copy to backend/.dev.vars for `wrangler dev` and the Prisma CLI. Never commit .dev.vars.
+
+# Direct PostgreSQL connection string
+DATABASE_URL="postgresql://medium:medium@localhost:5432/medium"
+
+# Long random string used to sign JWTs. Generate one with:
+#   node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+JWT_SECRET="replace-with-a-long-random-secret"
