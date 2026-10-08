@@ -1,0 +1,44 @@
+# Optional: PostgreSQL + the Worker (via `wrangler dev`) + the web app.
+#   JWT_SECRET=<random string> docker compose up --build   ->  http://localhost:8080
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: medium
+      POSTGRES_PASSWORD: medium
+      POSTGRES_DB: medium
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U medium -d medium"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    environment:
+      DATABASE_URL: postgresql://medium:medium@db:5432/medium
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET before running docker compose}
+      CORS_ORIGINS: http://localhost:8080
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8787:8787"
+
+  web:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    depends_on:
+      - api
+    ports:
+      - "8080:80"
+
+volumes:
+  pgdata:
