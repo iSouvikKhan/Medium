@@ -1,0 +1,23 @@
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+# Cloudflare / Wrangler
+.wrangler/
+.dev.vars
+
+# Generated Prisma client (created by `prisma generate` / npm install)
+backend/src/generated/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+!.dev.vars.example
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

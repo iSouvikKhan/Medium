@@ -1,0 +1,21 @@
+{
+  "name": "medium-clone",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Medium-style blogging platform: Hono on Cloudflare Workers, Prisma + PostgreSQL, React + Tailwind",
+  "workspaces": [
+    "common",
+    "backend",
+    "frontend"
+  ],
+  "scripts": {
+    "dev": "concurrently -n api,web -c blue,green \"npm run dev -w backend\" \"npm run dev -w frontend\"",
+    "test": "npm test -w common -w backend -w frontend",
+    "lint": "npm run lint -w backend -w frontend",
+    "typecheck": "npm run typecheck -w common -w backend -w frontend",
+    "build": "npm run build -w frontend"
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.6"
+  }
+}
