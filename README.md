@@ -1,4 +1,4 @@
-# Blog
+# Medium
 
 A Medium-style blogging application. Users can sign up, sign in, browse posts, read a single post, and publish new posts. The project is split into three parts:
 
