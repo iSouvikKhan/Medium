@@ -1,160 +1,269 @@
-# Medium
+# Medium Clone
 
-A Medium-style blogging application. Users can sign up, sign in, browse posts, read a single post, and publish new posts. The project is split into three parts:
-
-- **backend** - a REST API built with Hono that runs on Cloudflare Workers and stores data in PostgreSQL through Prisma (with Prisma Accelerate).
-- **frontend** - a React + TypeScript single-page app built with Vite and styled with Tailwind CSS.
-- **common** - a small shared package (`@souvik97381/medium-common`) with Zod schemas and TypeScript types used to validate request bodies on both sides.
+A Medium-style blogging platform with a clean, distraction-free reading and writing experience. The API is a **Hono** app on **Cloudflare Workers** that stores data in **PostgreSQL** through **Prisma**. The frontend is **React + TypeScript + Tailwind CSS**. Request schemas are shared between both through a small `common` workspace package.
 
 ## Features
 
-- User sign up and sign in with JWT-based authentication
-- Create and update blog posts (authenticated)
-- List all posts and view a single post with its author's name (authenticated)
-- Request validation with shared Zod schemas
-- Loading skeletons and a spinner while data is fetched
+- **Accounts**: sign up and sign in with email and password. Passwords are hashed with PBKDF2-SHA256 (Web Crypto, built into Workers), and sessions use 7-day JWTs (HS256) sent as `Authorization: Bearer <token>`.
+- **Writing**: a distraction-free editor with an auto-growing title and body, word count and reading time, **Publish** or **Save draft**, and a warning before leaving with unsaved changes.
+- **Editing and deleting**: only the author can change or delete a story (`403` for anyone else). Edit pages for other people's stories show a clear message.
+- **Drafts**: drafts are visible only to their author and never appear in the feed.
+- **Reading**: a public feed (newest first, paginated) and story pages with serif typography, paragraphs, author, date and reading time.
+- **Your stories**: published and draft tabs with edit and delete actions.
+- **Shared validation**: Zod schemas in `common/` validate requests on the API and forms in the UI, with the same messages.
+- **Robust UI**: loading skeletons, empty states, error states with retry, a not-found page, automatic sign-out on expired sessions, and a responsive layout.
+- **Upgrade path**: accounts created by the first version (which stored plain-text passwords) are re-hashed automatically on their next sign-in, and a migration keeps existing posts visible.
 
-## Tech Stack
+## Architecture
 
-| Part     | Technologies                                                        |
-|----------|---------------------------------------------------------------------|
-| Backend  | Hono, Cloudflare Workers (Wrangler), Prisma, Prisma Accelerate, PostgreSQL, TypeScript |
-| Frontend | React 18, React Router, Axios, Vite, Tailwind CSS, TypeScript       |
-| Common   | Zod, TypeScript                                                      |
+```mermaid
+flowchart LR
+    subgraph Browser
+        UI[React SPA<br/>feed · story · editor · your stories]
+    end
 
-## Project Structure
+    subgraph CF[Cloudflare Worker]
+        H[Hono app<br/>secure headers · CORS · errors]
+        AUTH[JWT auth<br/>required / optional]
+        R1[/api/v1/user/]
+        R2[/api/v1/blog/]
+        S[Store interface]
+        P[Prisma Client<br/>+ node-postgres adapter]
+    end
+
+    DB[(PostgreSQL<br/>User · Blog)]
+    C[common/<br/>Zod schemas + types]
+
+    UI -- "fetch JSON (Bearer JWT)" --> H --> AUTH --> R1 & R2 --> S --> P -- "TCP (nodejs_compat)" --> DB
+    C -. validates .-> R1 & R2
+    C -. validates .-> UI
+```
+
+- Routes depend on a small `Store` interface. In production it is implemented with Prisma; the tests use an in-memory implementation, so they need no database.
+- Workers cannot reuse database connections between requests, so a Prisma client with the `@prisma/adapter-pg` driver adapter is created per request and closed after the response (`waitUntil`).
+- Secrets (`DATABASE_URL`, `JWT_SECRET`) come from `.dev.vars` locally and from Wrangler secrets in production. Nothing secret is stored in `wrangler.toml`.
+
+## Tech stack
+
+| Part | Technologies |
+|---|---|
+| API | Hono 4, Cloudflare Workers (Wrangler 4, `nodejs_compat`), Prisma 7 (`prisma-client` generator, `workerd` runtime, `@prisma/adapter-pg`), PostgreSQL, TypeScript |
+| Web | React 19, React Router 7, Vite 8, Tailwind CSS 4, TypeScript |
+| Shared | Zod 4 schemas and TypeScript types (`@medium/common`, an npm workspace) |
+| Quality | Vitest, Testing Library, ESLint (typescript-eslint), GitHub Actions |
+| Optional | Docker, Docker Compose |
+
+## Project structure
 
 ```
-Blog/
-├── backend/
-│   ├── prisma/
-│   │   ├── schema.prisma        # User and Blog models (PostgreSQL)
-│   │   └── migrations/
-│   ├── src/
-│   │   ├── index.ts             # Hono app, CORS, route mounting
-│   │   └── routes/
-│   │       ├── user.ts          # /api/v1/user (signup, signin)
-│   │       └── blog.ts          # /api/v1/blog (create, update, list, get)
-│   ├── wrangler.toml            # Worker name and variables
-│   └── package.json
+Medium/
+├── package.json              # npm workspaces: common, backend, frontend
 ├── common/
-│   ├── src/index.ts             # Zod schemas and inferred types
-│   └── package.json
-└── frontend/
-    ├── src/
-    │   ├── App.tsx              # Routes
-    │   ├── config.ts            # BACKEND_URL
-    │   ├── hooks/index.ts       # useBlog, useBlogs
-    │   ├── components/          # Appbar, Auth, BlogCard, FullBlog, Quote, ...
-    │   └── pages/               # Signup, Signin, Blogs, Blog, Publish
-    └── package.json
+│   └── src/index.ts          # Zod schemas, API types, readingMinutes(), excerpt()
+├── backend/
+│   ├── src/
+│   │   ├── index.ts          # Worker entry: createApp + Prisma store
+│   │   ├── app.ts            # Hono app: headers, CORS, store per request, errors
+│   │   ├── routes/           # user.ts (signup, signin, me), blog.ts (feed, CRUD, drafts)
+│   │   ├── lib/              # auth (JWT), password (PBKDF2), validation, errors, presenters
+│   │   └── store/            # Store interface + Prisma implementation
+│   ├── prisma/
+│   │   ├── schema.prisma
+│   │   └── migrations/       # initial schema + timestamps/indexes/cascade
+│   ├── prisma.config.ts      # Prisma CLI config (reads .dev.vars)
+│   ├── wrangler.toml         # Worker config (no secrets)
+│   ├── .dev.vars.example
+│   └── test/                 # API tests with an in-memory store
+├── frontend/
+│   ├── src/
+│   │   ├── api/client.ts     # typed fetch client, token storage, 401 handling
+│   │   ├── auth/             # AuthContext, route guards
+│   │   ├── components/       # Header, PostCard, UI kit
+│   │   └── pages/            # Home, PostPage, Editor, MyStories, AuthPage
+│   └── vite.config.ts        # dev proxy /api → wrangler dev (:8787)
+├── docker-compose.yml
+└── .github/workflows/ci.yml
 ```
-
-## API
-
-All routes are prefixed with `/api/v1`. Blog routes require an `Authorization` header containing the JWT returned by sign up / sign in.
-
-| Method | Route            | Description                                   |
-|--------|------------------|-----------------------------------------------|
-| POST   | `/user/signup`   | Create a user (`username` as email, `password` min 6 chars, optional `name`) and return a JWT |
-| POST   | `/user/signin`   | Sign in with `username` and `password` and return a JWT |
-| POST   | `/blog`          | Create a post (`title`, `content`)            |
-| PUT    | `/blog`          | Update a post (`id`, `title`, `content`)      |
-| GET    | `/blog/bulk`     | List all posts with author names              |
-| GET    | `/blog/:id`      | Get a single post                             |
-
-## Frontend Routes
-
-| Path         | Page                       |
-|--------------|----------------------------|
-| `/signup`    | Sign up form               |
-| `/signin`    | Sign in form               |
-| `/blogs`     | List of all posts          |
-| `/blog/:id`  | Single post                |
-| `/publish`   | Write and publish a post   |
 
 ## Prerequisites
 
-- Node.js and npm
-- A PostgreSQL database
-- A Prisma Accelerate connection string for that database (the backend uses the Prisma edge client)
-- A Cloudflare account if you want to deploy the backend
+- **Node.js 22.12+** (or 20.19+) and npm
+- **PostgreSQL 14+**, local or hosted (any PostgreSQL that accepts TCP connections, e.g. Neon or Supabase)
+- For deployment: a **Cloudflare account** (the free plan is enough)
+- Optional: Docker with Docker Compose
 
-## Setup
+## Local setup (without Docker)
 
-Clone the repository:
-
-```bash
-git clone https://github.com/iSouvikKhan/Blog.git
-cd Blog
-```
-
-### Backend
+### 1. Install
 
 ```bash
-cd backend
-npm install
+git clone https://github.com/iSouvikKhan/Medium.git
+cd Medium
+npm install          # installs all workspaces and generates the Prisma client
 ```
 
-The Worker reads two variables: `DATABASE_URL` (the Prisma Accelerate URL) and `JWT_SECRET`. They are defined under `[vars]` in `backend/wrangler.toml`; replace them with your own values. You can also keep them out of version control by putting them in a `backend/.dev.vars` file (already ignored by `.gitignore`) for local development.
+### 2. Create a database
 
-Prisma CLI commands such as migrations need a direct database connection string. Set it in your shell before running them:
+**Windows**: install PostgreSQL from https://www.postgresql.org/download/windows/, then in *SQL Shell (psql)*:
+
+```sql
+CREATE USER medium WITH PASSWORD 'medium';
+CREATE DATABASE medium OWNER medium;
+```
+
+**Linux**: `sudo apt install postgresql`, then `sudo -u postgres psql` and run the same two statements.
+**macOS**: `brew install postgresql@17 && brew services start postgresql@17`, then `psql postgres` and run the same statements.
+
+### 3. Configure the API
+
+**Windows (PowerShell)**
+
+```powershell
+copy backend\.dev.vars.example backend\.dev.vars
+```
+
+**Linux / macOS**
 
 ```bash
-# Linux / macOS
-export DATABASE_URL="postgresql://..."
-
-# Windows (PowerShell)
-$env:DATABASE_URL="postgresql://..."
+cp backend/.dev.vars.example backend/.dev.vars
 ```
 
-Then apply the migrations and generate the client:
+Edit `backend/.dev.vars`: set `DATABASE_URL` (e.g. `postgresql://medium:medium@localhost:5432/medium`) and a random `JWT_SECRET`:
 
 ```bash
-npx prisma migrate deploy
-npx prisma generate --no-engine
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 ```
 
-Run the API locally:
+### 4. Apply migrations
+
+```bash
+npm run db:migrate -w backend      # prisma migrate deploy (reads backend/.dev.vars)
+```
+
+### 5. Run
 
 ```bash
 npm run dev
 ```
 
-Deploy to Cloudflare Workers:
+This starts:
+
+- the API with **`wrangler dev`** on http://localhost:8787 (the Worker runs locally in `workerd`, with secrets from `.dev.vars`);
+- the web app with Vite on http://localhost:5173. `/api` requests are proxied to `:8787`.
+
+Run them separately if you prefer: `npm run dev -w backend` and `npm run dev -w frontend`.
+
+## Running with Docker (optional)
 
 ```bash
-npm run deploy
+# Linux/macOS
+JWT_SECRET=$(node -e "console.log(require('crypto').randomBytes(32).toString('hex'))") docker compose up --build
 ```
 
-### Frontend
+```powershell
+# Windows PowerShell
+$env:JWT_SECRET = node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+docker compose up --build
+```
+
+- App: http://localhost:8080 (nginx serves the build and proxies `/api`)
+- API (`wrangler dev` in a container): http://localhost:8787
+- PostgreSQL: `localhost:5432` (user, password and database are all `medium`)
+
+Migrations run automatically when the API container starts.
+
+## Deploying to Cloudflare
+
+### API (Worker)
+
+1. Create a hosted PostgreSQL database and copy its connection string.
+2. Apply the migrations to it. Set `DATABASE_URL` for this command only:
+   ```bash
+   # Linux/macOS
+   DATABASE_URL="postgresql://..." npm run db:migrate -w backend
+   # Windows PowerShell
+   $env:DATABASE_URL="postgresql://..."; npm run db:migrate -w backend
+   ```
+3. Log in and store the secrets in Cloudflare:
+   ```bash
+   cd backend
+   npx wrangler login
+   npx wrangler secret put DATABASE_URL
+   npx wrangler secret put JWT_SECRET
+   ```
+4. Set `CORS_ORIGINS` in `backend/wrangler.toml` to your frontend URL (comma-separated if several), for example `https://medium-clone.pages.dev`.
+5. Deploy:
+   ```bash
+   npm run deploy        # wrangler deploy --minify
+   ```
+   Wrangler prints the Worker URL, for example `https://medium-api.<your-subdomain>.workers.dev`.
+
+To check the bundle without deploying: `npx wrangler deploy --dry-run --outdir dist`.
+
+### Web app (Cloudflare Pages)
 
 ```bash
-cd frontend
-npm install
+# from the repository root; point the build at your Worker
+VITE_API_URL=https://medium-api.<your-subdomain>.workers.dev npm run build -w frontend
+npx wrangler pages deploy frontend/dist --project-name medium-clone
 ```
 
-The API base URL is hardcoded in `frontend/src/config.ts` (`BACKEND_URL`). Change it to point at your own deployed Worker or to the local URL printed by `npm run dev` in the backend.
+On Windows PowerShell, set `$env:VITE_API_URL="https://..."` before `npm run build -w frontend`. Pages serves `index.html` for unknown paths, so client-side routes such as `/blog/1` work on refresh. Any other static host also works if it rewrites unknown paths to `index.html`.
+
+## Environment variables
+
+API (`backend/.dev.vars` locally, Wrangler secrets and vars in production):
+
+| Variable | Kind | Description |
+|---|---|---|
+| `DATABASE_URL` | secret | PostgreSQL connection string (also used by the Prisma CLI) |
+| `JWT_SECRET` | secret | Secret for signing JWTs. Use a long random string. |
+| `CORS_ORIGINS` | var (`wrangler.toml`) | Comma-separated allowed browser origins. Default `http://localhost:5173`. |
+
+If a secret is missing, the API answers `500 {"message": "Server is not configured"}` and logs which variables to set.
+
+Web (`frontend/.env`, optional, see [`frontend/.env.example`](frontend/.env.example)):
+
+| Variable | Default | Description |
+|---|---|---|
+| `VITE_API_URL` | empty (same origin) | API base URL for production builds |
+| `VITE_PROXY_TARGET` | `http://localhost:8787` | Dev-server proxy target |
+
+## API endpoints
+
+Base path `/api/v1`. "Auth" means `Authorization: Bearer <token>` is required.
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| `POST` | `/user/signup` | no | `{ username (email), password (8+ chars), name }` → `201 { token, user }`. `409` if the email exists. |
+| `POST` | `/user/signin` | no | `{ username, password }` → `{ token, user }`. `401` on bad credentials. |
+| `GET` | `/user/me` | yes | `{ user }` |
+| `GET` | `/blog/bulk?page=1&pageSize=10` | no | Published stories, newest first: `{ items, page, pageSize, total, totalPages }` |
+| `GET` | `/blog/mine` | yes | The caller's stories, including drafts: `{ items }` |
+| `GET` | `/blog/:id` | optional | `{ post }`. Drafts are only returned to their author; otherwise `404`. |
+| `POST` | `/blog` | yes | `{ title, content, published? = true }` → `201 { post }` |
+| `PUT` | `/blog/:id` | yes (author) | `{ title?, content?, published? }` → `{ post }`. `403` if not the author. |
+| `DELETE` | `/blog/:id` | yes (author) | `204`. `403` if not the author. |
+
+Stories in responses include `id, title, excerpt, readingMinutes, published, createdAt, updatedAt, author { id, name }`, and `content` on single-story responses. Errors are `{ "message": "...", "details"?: [{ "field", "message" }] }` with `400` (validation or malformed JSON), `401`, `403`, `404`, `409` or `500`.
+
+## Testing
 
 ```bash
-npm run dev       # start the Vite dev server
-npm run build     # type-check and build for production
-npm run preview   # preview the production build
-npm run lint      # run ESLint
+npm test            # all workspaces
+npm run typecheck
+npm run lint
+npm run build
 ```
 
-### Common
+- **common**: schema normalisation and limits, reading time and excerpts.
+- **backend** (Vitest, in-memory store, no database or Workers runtime needed): PBKDF2 hashing and legacy-password upgrade, sign-up/sign-in (validation, duplicate emails, wrong passwords), missing, malformed, forged and expired tokens, the feed with pagination and ordering, private drafts, author-only edit and delete, invalid ids, CORS allow-list, hidden internal errors and missing-configuration handling.
+- **frontend** (Vitest + Testing Library, `fetch` mocked): feed (content, empty, error with retry, pagination), story page (paragraphs, author-only actions, not found), auth (client-side validation, token storage and redirect, server errors, protected routes) and the editor (validation, publishing, editing someone else's story).
 
-The shared schemas are published to npm as `@souvik97381/medium-common` and installed as a dependency by both the backend and frontend. If you change `common/src/index.ts`, build it with the TypeScript compiler (output goes to `common/dist`) and publish a new version:
+CI also bundles the Worker with `wrangler deploy --dry-run` on every push.
 
-```bash
-cd common
-npm install
-npx -p typescript tsc
-npm publish --access public
-```
+## Upgrading from the first version
 
-## Notes
-
-- This is a learning project. Passwords are stored in plain text and the blog list has no pagination, so it is not intended for production use.
-- The backend returns the token as `{ jwtToken, message }`, while the frontend's `Auth` component stores the whole response object in `localStorage`. If authenticated requests fail from the UI, store `response.data.jwtToken` instead.
+- Run `npm run db:migrate -w backend`. The new migration adds timestamps, indexes and cascading deletes, and marks existing posts as published so they stay in the feed.
+- Existing users can sign in with their old passwords. They are re-hashed automatically on first sign-in.
+- Tokens are now returned as `{ token, user }` and sent as `Authorization: Bearer <token>`. Stories are updated through `PUT /blog/:id`, which replaces `PUT /blog` with the id in the body.
